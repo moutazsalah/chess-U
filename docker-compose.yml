@@ -1,0 +1,48 @@
+services:
+  chessu:
+    build:
+      context: .
+    image: ${CHESSU_IMAGE:-chessu:latest}
+    container_name: chessu_container
+    environment:
+      POSTGRES_DB: chessu
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      PGDATABASE: chessu
+      PGUSER: user
+      PGPASSWORD: password
+      PGHOST: db
+      PGPORT: 5432
+      DATABASE_URL: postgres://user:password@db:5432/chessu
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - chessu_network
+
+  db:
+    image: postgres:15
+    container_name: postgres_container
+    environment:
+      POSTGRES_DB: chessu
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d chessu"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - chessu_network
+
+volumes:
+  postgres_data:
+
+networks:
+  chessu_network:
+    driver: bridge

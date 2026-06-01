@@ -1,0 +1,86 @@
+name: Deploy Serverless Backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      cors_origin:
+        description: Frontend origin allowed by CORS
+        required: true
+        default: http://localhost:3000
+      stack_name:
+        description: CloudFormation stack name
+        required: true
+        default: chessu-serverless
+  push:
+    branches:
+      - main
+    paths:
+      - infrastructure/**
+      - server/**
+      - types/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/deploy-serverless.yml
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      STACK_NAME: ${{ github.event.inputs.stack_name || 'chessu-serverless' }}
+      CORS_ORIGIN: ${{ github.event.inputs.cors_origin || secrets.CORS_ORIGIN }}
+      SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.2.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build server
+        run: pnpm --filter server build
+
+      - name: Setup SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: SAM build
+        run: sam build -t infrastructure/template.yaml
+
+      - name: SAM deploy
+        run: |
+          sam deploy \
+            --template-file .aws-sam/build/template.yaml \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              CorsOrigin="$CORS_ORIGIN" \
+              SessionSecret="$SESSION_SECRET"

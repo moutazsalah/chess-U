@@ -1,0 +1,16 @@
+.github
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+LICENSE
+README.md
+docker-compose.yml
+Dockerfile
+LICENSE
+
+node_modules
+**/node_modules
+.pnpm-store
+.next
+dist
+build
+.git
