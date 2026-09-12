@@ -1,9 +1,9 @@
-import { API_URL } from "@/config";
+import { IDENTITY_API_URL } from "@/config";
 import type { User } from "@chessu/types";
 
 export const fetchSession = async () => {
     try {
-        const res = await fetch(`${API_URL}/v1/auth`, {
+        const res = await fetch(`${IDENTITY_API_URL}/v1/auth`, {
             credentials: "include"
         });
 
@@ -18,7 +18,7 @@ export const fetchSession = async () => {
 
 export const setGuestSession = async (name: string) => {
     try {
-        const res = await fetch(`${API_URL}/v1/auth/guest`, {
+        const res = await fetch(`${IDENTITY_API_URL}/v1/auth/guest`, {
             method: "POST",
             credentials: "include",
             headers: {
@@ -37,7 +37,7 @@ export const setGuestSession = async (name: string) => {
 
 export const register = async (name: string, password: string, email?: string) => {
     try {
-        const res = await fetch(`${API_URL}/v1/auth/register`, {
+        const res = await fetch(`${IDENTITY_API_URL}/v1/auth/register`, {
             method: "POST",
             credentials: "include",
             headers: {
@@ -59,7 +59,7 @@ export const register = async (name: string, password: string, email?: string) =
 
 export const login = async (name: string, password: string) => {
     try {
-        const res = await fetch(`${API_URL}/v1/auth/login`, {
+        const res = await fetch(`${IDENTITY_API_URL}/v1/auth/login`, {
             method: "POST",
             credentials: "include",
             headers: {
@@ -81,7 +81,7 @@ export const login = async (name: string, password: string) => {
 
 export const logout = async () => {
     try {
-        const res = await fetch(`${API_URL}/v1/auth/logout`, {
+        const res = await fetch(`${IDENTITY_API_URL}/v1/auth/logout`, {
             method: "POST",
             credentials: "include"
         });
@@ -96,7 +96,7 @@ export const logout = async () => {
 export const updateUser = async (name?: string, email?: string, password?: string) => {
     try {
         if (!name && !email && !password) return;
-        const res = await fetch(`${API_URL}/v1/auth/`, {
+        const res = await fetch(`${IDENTITY_API_URL}/v1/auth/`, {
             method: "PATCH",
             credentials: "include",
             headers: {

@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    name: App and SAM Build
+    name: Lint and Build Microservices
     runs-on: ubuntu-latest
 
     steps:
@@ -18,7 +18,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 11.2.2
+          version: 11.9.0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -29,20 +29,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build server
-        run: pnpm --filter server build
+      - name: Lint workspace
+        run: pnpm lint
+
+      - name: Build shared package and services
+        run: pnpm build:microservices
 
       - name: Build client
-        run: pnpm --filter client build
-
-      - name: Validate SAM template
-        uses: aws-actions/setup-sam@v2
-
-      - name: SAM build
-        run: sam build -t infrastructure/template.yaml
+        run: pnpm build:client
 
   docker:
-    name: Docker Compose Build
+    name: Validate Docker Setup
     runs-on: ubuntu-latest
 
     steps:
@@ -55,13 +52,34 @@ jobs:
       - name: Validate compose file
         run: docker compose config
 
-      - name: Build monolithic EC2 image
+      - name: Build identity-service image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
+          file: ./services/identity-service/Dockerfile
           push: false
-          tags: chessu:ci
+          tags: chessu-identity:ci
 
-      - name: Build compose services
-        run: docker compose build
+      - name: Build game-service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./services/game-service/Dockerfile
+          push: false
+          tags: chessu-game:ci
+
+      - name: Build stats-history-service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./services/stats-history-service/Dockerfile
+          push: false
+          tags: chessu-stats:ci
+
+      - name: Build client image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./client/Dockerfile
+          push: false
+          tags: chessu-client:ci

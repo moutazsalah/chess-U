@@ -1,4 +1,4 @@
-name: Deploy Serverless Backend
+name: Legacy Deploy Serverless Backend
 
 on:
   workflow_dispatch:
@@ -11,21 +11,10 @@ on:
         description: CloudFormation stack name
         required: true
         default: chessu-serverless
-  push:
-    branches:
-      - main
-    paths:
-      - infrastructure/**
-      - server/**
-      - types/**
-      - package.json
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - .github/workflows/deploy-serverless.yml
 
 jobs:
   deploy:
-    name: Deploy
+    name: Deploy Legacy Serverless Backend
     runs-on: ubuntu-latest
 
     permissions:

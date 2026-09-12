@@ -1,29 +1,158 @@
 services:
-  chessu:
+  client:
     build:
       context: .
-    image: ${CHESSU_IMAGE:-chessu:latest}
-    container_name: chessu_container
+      dockerfile: client/Dockerfile
+    image: ${CHESSU_CLIENT_IMAGE:-chessu-client:latest}
+    container_name: chessu_client
     environment:
-      POSTGRES_DB: chessu
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      PGDATABASE: chessu
-      PGUSER: user
-      PGPASSWORD: password
-      PGHOST: db
-      PGPORT: 5432
-      DATABASE_URL: postgres://user:password@db:5432/chessu
+      NEXT_PUBLIC_IDENTITY_API_URL: http://localhost:4001
+      NEXT_PUBLIC_GAME_API_URL: http://localhost:4002
+      NEXT_PUBLIC_STATS_API_URL: http://localhost:4003
+      NEXT_PUBLIC_SOCKET_URL: http://localhost:4002
     ports:
       - "3000:3000"
-      - "3001:3001"
     depends_on:
-      db:
+      identity-db:
+        condition: service_healthy
+      game-db:
+        condition: service_healthy
+      stats-db:
         condition: service_healthy
     networks:
       - chessu_network
 
-  db:
+  identity-service:
+    build:
+      context: .
+      dockerfile: services/identity-service/Dockerfile
+    image: ${CHESSU_IDENTITY_IMAGE:-chessu-identity:latest}
+    container_name: chessu_identity
+    environment:
+      PORT: 4001
+      CORS_ORIGIN: http://localhost:3000
+      DATABASE_URL: postgres://user:password@identity-db:5432/chessu_identity
+      SESSION_SECRET: change-me
+    ports:
+      - "4001:4001"
+    depends_on:
+      identity-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+    networks:
+      - chessu_network
+
+  game-service:
+    build:
+      context: .
+      dockerfile: services/game-service/Dockerfile
+    image: ${CHESSU_GAME_IMAGE:-chessu-game:latest}
+    container_name: chessu_game
+    environment:
+      PORT: 4002
+      CORS_ORIGIN: http://localhost:3000
+      DATABASE_URL: postgres://user:password@game-db:5432/chessu_game
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672
+      IDENTITY_SERVICE_URL: http://identity-service:4001
+    ports:
+      - "4002:4002"
+    depends_on:
+      game-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+    networks:
+      - chessu_network
+
+  stats-history-service:
+    build:
+      context: .
+      dockerfile: services/stats-history-service/Dockerfile
+    image: ${CHESSU_STATS_IMAGE:-chessu-stats:latest}
+    container_name: chessu_stats
+    environment:
+      PORT: 4003
+      CORS_ORIGIN: http://localhost:3000
+      DATABASE_URL: postgres://user:password@stats-db:5432/chessu_stats
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672
+    ports:
+      - "4003:4003"
+    depends_on:
+      stats-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+    networks:
+      - chessu_network
+
+  identity-db:
+    image: postgres:15
+    container_name: chessu_identity_db
+    environment:
+      POSTGRES_DB: chessu_identity
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5433:5432"
+    volumes:
+      - identity_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d chessu_identity"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - chessu_network
+
+  game-db:
+    image: postgres:15
+    container_name: chessu_game_db
+    environment:
+      POSTGRES_DB: chessu_game
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5434:5432"
+    volumes:
+      - game_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d chessu_game"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - chessu_network
+
+  stats-db:
+    image: postgres:15
+    container_name: chessu_stats_db
+    environment:
+      POSTGRES_DB: chessu_stats
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5435:5432"
+    volumes:
+      - stats_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d chessu_stats"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - chessu_network
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: chessu_rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - chessu_network
+
+  legacy-db:
     image: postgres:15
     container_name: postgres_container
     environment:
@@ -42,6 +171,9 @@ services:
 
 volumes:
   postgres_data:
+  identity_postgres_data:
+  game_postgres_data:
+  stats_postgres_data:
 
 networks:
   chessu_network:

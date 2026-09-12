@@ -1,4 +1,4 @@
-name: Deploy EC2 Monolith
+name: Deploy EC2 Microservices
 
 on:
   workflow_dispatch:
@@ -11,11 +11,14 @@ on:
       - completed
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}/chessu
+  CLIENT_IMAGE_NAME: ghcr.io/${{ github.repository }}/chessu-client
+  IDENTITY_IMAGE_NAME: ghcr.io/${{ github.repository }}/chessu-identity
+  GAME_IMAGE_NAME: ghcr.io/${{ github.repository }}/chessu-game
+  STATS_IMAGE_NAME: ghcr.io/${{ github.repository }}/chessu-stats
 
 jobs:
   build-and-push:
-    name: Build and Push Image
+    name: Build and Push Images
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
 
@@ -24,7 +27,10 @@ jobs:
       packages: write
 
     outputs:
-      image: ${{ steps.image.outputs.image }}
+      client_image: ${{ steps.images.outputs.client_image }}
+      identity_image: ${{ steps.images.outputs.identity_image }}
+      game_image: ${{ steps.images.outputs.game_image }}
+      stats_image: ${{ steps.images.outputs.stats_image }}
 
     steps:
       - name: Checkout
@@ -40,27 +46,85 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
-        id: meta
+      - name: Client image metadata
+        id: meta_client
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_NAME }}
+          images: ${{ env.CLIENT_IMAGE_NAME }}
           tags: |
             type=sha,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push image
+      - name: Build and push client image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
+          file: ./client/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta_client.outputs.tags }}
+          labels: ${{ steps.meta_client.outputs.labels }}
 
-      - name: Export image
-        id: image
-        run: echo "image=${IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Identity image metadata
+        id: meta_identity
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IDENTITY_IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push identity image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./services/identity-service/Dockerfile
+          push: true
+          tags: ${{ steps.meta_identity.outputs.tags }}
+          labels: ${{ steps.meta_identity.outputs.labels }}
+
+      - name: Game image metadata
+        id: meta_game
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.GAME_IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push game image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./services/game-service/Dockerfile
+          push: true
+          tags: ${{ steps.meta_game.outputs.tags }}
+          labels: ${{ steps.meta_game.outputs.labels }}
+
+      - name: Stats image metadata
+        id: meta_stats
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.STATS_IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push stats image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./services/stats-history-service/Dockerfile
+          push: true
+          tags: ${{ steps.meta_stats.outputs.tags }}
+          labels: ${{ steps.meta_stats.outputs.labels }}
+
+      - name: Export image tags
+        id: images
+        run: |
+          echo "client_image=${CLIENT_IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "identity_image=${IDENTITY_IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "game_image=${GAME_IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "stats_image=${STATS_IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
   deploy:
     name: Pull and Restart on EC2
@@ -79,7 +143,14 @@ jobs:
           script: |
             cd "${{ secrets.EC2_APP_DIR }}"
             docker login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
-            docker pull "${{ needs.build-and-push.outputs.image }}"
-            export CHESSU_IMAGE="${{ needs.build-and-push.outputs.image }}"
+            docker pull "${{ needs.build-and-push.outputs.client_image }}"
+            docker pull "${{ needs.build-and-push.outputs.identity_image }}"
+            docker pull "${{ needs.build-and-push.outputs.game_image }}"
+            docker pull "${{ needs.build-and-push.outputs.stats_image }}"
+            export CHESSU_CLIENT_IMAGE="${{ needs.build-and-push.outputs.client_image }}"
+            export CHESSU_IDENTITY_IMAGE="${{ needs.build-and-push.outputs.identity_image }}"
+            export CHESSU_GAME_IMAGE="${{ needs.build-and-push.outputs.game_image }}"
+            export CHESSU_STATS_IMAGE="${{ needs.build-and-push.outputs.stats_image }}"
+            docker compose pull client identity-service game-service stats-history-service
             docker compose up -d
             docker image prune -f

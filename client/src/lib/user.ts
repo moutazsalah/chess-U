@@ -1,10 +1,10 @@
-import { API_URL } from "@/config";
+import { STATS_API_URL } from "@/config";
 import type { Game, User } from "@chessu/types";
 
 export const fetchProfileData = async (name: string) => {
     try {
         // TODO: handle caching more efficiently?
-        const res = await fetch(`${API_URL}/v1/users/${name}`, {
+        const res = await fetch(`${STATS_API_URL}/v1/users/${name}`, {
             next: { revalidate: 10 }
         });
 
