@@ -27,7 +27,10 @@ const createActor = ({ persistDelayMs = 0 } = {}) => {
         publish: async (type, payload) => {
             published.push({ type, payload });
         },
-        onStopped: (code) => stopped.push(code)
+        onStopped: (code) => stopped.push(code),
+        onCrashed: (code, error) => {
+            throw error;
+        }
     };
 
     const actor = new GameActor({ code: "test01", host: white, white, pgn: "" }, deps);

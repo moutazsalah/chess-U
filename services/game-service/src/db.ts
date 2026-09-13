@@ -30,3 +30,15 @@ export const upsertGameState = async (game: Game, active = true) => {
         [game.code, JSON.stringify(sanitizeGameForStorage(game)), active]
     );
 };
+
+const loadStates = async (query: string, params: unknown[] = []) =>
+    (await db.query(query, params)).rows.map((row) => row.state as Game);
+
+export const loadGameState = async (code: string) =>
+    (await loadStates(`SELECT state FROM "game_write" WHERE code = $1`, [code]))[0];
+
+export const listActiveGameStates = () =>
+    loadStates(`SELECT state FROM "game_write" WHERE active = TRUE ORDER BY created_at`);
+
+export const listFinishedGameStates = () =>
+    loadStates(`SELECT state FROM "game_write" WHERE active = FALSE ORDER BY updated_at`);

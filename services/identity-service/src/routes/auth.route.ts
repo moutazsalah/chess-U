@@ -6,7 +6,6 @@ import {
     loginUser,
     logoutSession,
     registerUser,
-    resolveSession,
     updateUser
 } from "../controllers/auth.controller.js";
 
@@ -18,6 +17,5 @@ router.post("/register", registerUser);
 router.post("/login", loginUser);
 router.post("/logout", logoutSession);
 router.patch("/", updateUser);
-router.get("/internal/session", resolveSession);
 
 export default router;

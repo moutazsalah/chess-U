@@ -10,7 +10,16 @@ import { Chess } from "chess.js";
  *   so two moves arriving at the same moment can never interleave or corrupt the state,
  *   even though each message awaits I/O (database write, RabbitMQ publish).
  * - Different games are different actors, so they run independently of each other.
+ *
+ * "Let it crash": the actor does not try to recover from unexpected failures (e.g. the database
+ * write fails). It stops, rejects the messages in its mailbox and reports the failure to its
+ * supervisor (see supervisor.ts), which restarts it from the last persisted state.
+ * Expected rule violations (illegal move, not your turn, ...) are GameRuleErrors: they only
+ * reject that one message and the actor keeps running.
  */
+
+// a request that breaks the rules of the game; not a failure of the actor
+export class GameRuleError extends Error {}
 
 export type Move = { from: string; to: string; promotion?: string };
 
@@ -39,7 +48,10 @@ export type GameReplies = {
 export interface GameActorDeps {
     persist: (game: Game, active: boolean) => Promise<void>;
     publish: (type: string, payload: unknown) => Promise<void>;
+    // the game ended normally
     onStopped: (code: string) => void;
+    // unexpected failure: the supervisor decides what to do
+    onCrashed: (code: string, error: unknown) => void;
 }
 
 type Envelope = {
@@ -51,7 +63,7 @@ type Envelope = {
 export class GameActor {
     private readonly mailbox: Envelope[] = [];
     private processing = false;
-    private stopped = false;
+    private status: "running" | "stopped" | "crashed" = "running";
 
     constructor(
         private readonly game: Game,
@@ -81,16 +93,30 @@ export class GameActor {
         this.processing = true;
         while (this.mailbox.length) {
             const { message, resolve, reject } = this.mailbox.shift() as Envelope;
+            if (this.status !== "running") {
+                reject(
+                    this.status === "stopped"
+                        ? new GameRuleError("Game already finished")
+                        : new Error("Game is restarting, try again")
+                );
+                continue;
+            }
             try {
-                if (this.stopped) {
-                    throw new Error("Game already finished");
-                }
                 resolve(await this.receive(message));
             } catch (error) {
                 reject(error);
+                if (!(error instanceof GameRuleError)) {
+                    this.crash(error);
+                }
             }
         }
         this.processing = false;
+    }
+
+    private crash(error: unknown) {
+        this.status = "crashed";
+        // the in-memory state may be half-updated, so it is discarded together with the actor
+        this.deps.onCrashed(this.code, error);
     }
 
     private receive(message: GameMessage) {
@@ -109,7 +135,7 @@ export class GameActor {
     }
 
     private stop() {
-        this.stopped = true;
+        this.status = "stopped";
         this.deps.onStopped(this.code);
     }
 
@@ -189,7 +215,7 @@ export class GameActor {
     private async onSendMove(user: User, move: Move) {
         const game = this.game;
         if (game.endReason || game.winner) {
-            throw new Error("Game already finished");
+            throw new GameRuleError("Game already finished");
         }
 
         const chess = new Chess();
@@ -202,13 +228,18 @@ export class GameActor {
             (previousTurn === "w" && user.id !== game.white?.id) ||
             (previousTurn === "b" && user.id !== game.black?.id)
         ) {
-            throw new Error("Not your turn");
+            throw new GameRuleError("Not your turn");
         }
 
         // chess.js throws on illegal moves in newer versions and returns null in older ones
-        const appliedMove = chess.move(move);
+        let appliedMove: unknown = null;
+        try {
+            appliedMove = chess.move(move);
+        } catch {
+            // handled below
+        }
         if (!appliedMove) {
-            throw new Error("Invalid move");
+            throw new GameRuleError("Invalid move");
         }
 
         game.pgn = chess.pgn();
@@ -241,13 +272,13 @@ export class GameActor {
     private async onClaimAbandoned(user: User, claim: "win" | "draw") {
         const { white, black } = this.game;
         if (!this.game.pgn || !white || !black || (white.id !== user.id && black.id !== user.id)) {
-            throw new Error("Invalid abandoned claim");
+            throw new GameRuleError("Invalid abandoned claim");
         }
 
         const isWhitePlayer = white.id === user.id;
         const opponent = isWhitePlayer ? black : white;
         if (opponent.connected || Date.now() - (opponent.disconnectedOn as number) < 50000) {
-            throw new Error("Opponent is still connected");
+            throw new GameRuleError("Opponent is still connected");
         }
 
         const winner = claim === "draw" ? "draw" : isWhitePlayer ? "white" : "black";

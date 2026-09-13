@@ -18,7 +18,7 @@ export const initSocketServer = (io: Server) => {
     io.use(async (socket: GameSocket, next) => {
         try {
             const cookieHeader = socket.handshake.headers.cookie;
-            const user = await resolveUserFromCookie(cookieHeader);
+            const user = resolveUserFromCookie(cookieHeader);
             if (!user?.id) {
                 next(new Error("Unauthorized"));
                 return;

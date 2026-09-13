@@ -5,6 +5,7 @@ import xss from "xss";
 
 import { publishEvent as emitIdentityEvent } from "../publisher.js";
 import { createUser, findByNameOrEmail, updateUserById } from "../repositories/user.repository.js";
+import { clearUserToken, issueUserToken } from "../session.js";
 
 const usernamePattern = /^[A-Za-z0-9]+$/;
 
@@ -35,12 +36,14 @@ export const guestSession = async (req: Request, res: Response) => {
 
     await emitIdentityEvent("GuestSessionStarted", { sessionId: req.session.id, name });
 
+    issueUserToken(res, req.session.user);
     req.session.save(() => {
         res.status(201).json(req.session.user);
     });
 };
 
 export const logoutSession = async (req: Request, res: Response) => {
+    clearUserToken(res);
     req.session.destroy(() => {
         res.status(204).end();
     });
@@ -79,6 +82,7 @@ export const registerUser = async (req: Request, res: Response) => {
     req.session.user = newUser;
     await emitIdentityEvent("UserRegistered", { id: newUser.id, name: newUser.name, email: newUser.email });
 
+    issueUserToken(res, req.session.user);
     req.session.save(() => {
         res.status(201).json(req.session.user);
     });
@@ -119,6 +123,7 @@ export const loginUser = async (req: Request, res: Response) => {
 
     await emitIdentityEvent("UserLoggedIn", { id: users[0].id, name: users[0].name });
 
+    issueUserToken(res, req.session.user);
     req.session.save(() => {
         res.status(200).json(req.session.user);
     });
@@ -169,16 +174,8 @@ export const updateUser = async (req: Request, res: Response) => {
     req.session.user = user;
     await emitIdentityEvent("UserUpdated", { id: user.id, name: user.name, email: user.email });
 
+    issueUserToken(res, req.session.user);
     req.session.save(() => {
         res.status(200).json(req.session.user);
     });
-};
-
-export const resolveSession = async (req: Request, res: Response) => {
-    if (!req.session.user) {
-        res.status(204).end();
-        return;
-    }
-
-    res.status(200).json(req.session.user);
 };

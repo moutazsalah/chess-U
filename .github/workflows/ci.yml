@@ -24,7 +24,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
@@ -36,7 +36,7 @@ jobs:
       - name: Build shared package and services
         run: pnpm build:microservices
 
-      - name: Unit tests (game actor)
+      - name: Unit tests (game actor and supervisor)
         run: pnpm test:unit
 
       - name: Build client
@@ -58,21 +58,21 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Start microservices, databases and RabbitMQ
-        run: docker compose up -d --build --wait identity-service game-service stats-history-service
+        run: docker compose up -d --build --wait api-gateway identity-service game-service stats-history-service
 
       - name: Run end-to-end tests
         run: pnpm test:e2e
 
       - name: Service logs
         if: always()
-        run: docker compose logs identity-service game-service stats-history-service
+        run: docker compose logs api-gateway identity-service game-service stats-history-service
 
       - name: Stop stack
         if: always()
@@ -115,6 +115,14 @@ jobs:
           file: ./services/stats-history-service/Dockerfile
           push: false
           tags: chessu-stats:ci
+
+      - name: Build api-gateway image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./services/api-gateway/Dockerfile
+          push: false
+          tags: chessu-gateway:ci
 
       - name: Build client image
         uses: docker/build-push-action@v6

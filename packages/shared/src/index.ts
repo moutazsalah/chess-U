@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import type { Express } from "express";
 import express from "express";
+import jwt from "jsonwebtoken";
 import pg from "pg";
 import amqplib from "amqplib";
 
@@ -31,6 +32,49 @@ export const createApp = (serviceName: string): Express => {
         res.status(200).json({ service: serviceName, ok: true });
     });
     return app;
+};
+
+/*
+ * Stateless user tokens: identity-service signs a JWT when a user logs in, other services verify
+ * it locally with the shared secret. They never have to call identity-service to know who the
+ * user is, so they keep working while identity-service is down.
+ */
+export const USER_TOKEN_COOKIE = "chessu_token";
+export const USER_TOKEN_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
+export interface TokenUser {
+    id: number | string; // number for registered users, string for guests
+    name: string;
+}
+
+const tokenSecret = () => requireEnv("TOKEN_SECRET", "dev-token-secret");
+
+export const signUserToken = (user: TokenUser) =>
+    jwt.sign({ uid: user.id, name: user.name }, tokenSecret(), {
+        issuer: "identity-service",
+        expiresIn: USER_TOKEN_MAX_AGE_SECONDS
+    });
+
+export const verifyUserToken = (token: string): TokenUser | null => {
+    try {
+        const claims = jwt.verify(token, tokenSecret(), { issuer: "identity-service" }) as {
+            uid: number | string;
+            name: string;
+        };
+        return { id: claims.uid, name: claims.name };
+    } catch {
+        return null; // invalid signature, expired or malformed
+    }
+};
+
+export const readCookie = (cookieHeader: string | undefined | null, name: string) => {
+    for (const part of cookieHeader?.split(";") ?? []) {
+        const [key, ...value] = part.trim().split("=");
+        if (key === name) {
+            return decodeURIComponent(value.join("="));
+        }
+    }
+    return undefined;
 };
 
 export const DOMAIN_EVENTS_EXCHANGE = "domain-events";

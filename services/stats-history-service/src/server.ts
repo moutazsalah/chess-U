@@ -1,13 +1,15 @@
 import { createApp } from "@chessu/shared";
-import cors from "cors";
 
 import { db, initReadModelTables } from "./db.js";
 import { initConsumer } from "./consumer.js";
+import { initializeReadModels } from "./initialize.js";
 
 const app = createApp("stats-history-service");
 const port = Number(process.env.PORT || 4003);
 
 await initReadModelTables();
+// fill empty read models from the owning services before consuming new events
+await initializeReadModels();
 await initConsumer();
 
 const normalizeUserId = (value: string | null) => {
@@ -28,13 +30,6 @@ const mapHistoryRow = (row: Record<string, any>) => ({
     startedAt: row.started_at?.getTime(),
     endedAt: row.ended_at?.getTime()
 });
-
-app.use(
-    cors({
-        origin: process.env.CORS_ORIGIN || "http://localhost:3000",
-        credentials: true
-    })
-);
 
 app.get("/v1/leaderboard", async (_, res) => {
     const result = await db.query(

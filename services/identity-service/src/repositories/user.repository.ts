@@ -70,3 +70,8 @@ export const updateUserById = async (id: number, updatedUser: StoredUser) => {
     );
     return result.rows[0] as User | undefined;
 };
+
+export const listUsers = async () => {
+    const result = await db.query(`SELECT id, name FROM "identity_user" ORDER BY id`);
+    return result.rows as User[];
+};

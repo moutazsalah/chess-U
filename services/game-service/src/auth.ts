@@ -1,21 +1,9 @@
+import { readCookie, USER_TOKEN_COOKIE, verifyUserToken } from "@chessu/shared";
 import type { User } from "@chessu/types";
 
-const identityServiceUrl = process.env.IDENTITY_SERVICE_URL || "http://localhost:4001";
-
-export const resolveUserFromCookie = async (cookieHeader?: string | null) => {
-    if (!cookieHeader) {
-        return null;
-    }
-
-    const response = await fetch(`${identityServiceUrl}/v1/auth/internal/session`, {
-        headers: {
-            cookie: cookieHeader
-        }
-    });
-
-    if (response.status !== 200) {
-        return null;
-    }
-
-    return (await response.json()) as User;
+// The user is identified from the token signed by identity-service. No call to identity-service
+// is needed, so games keep working while identity-service is down.
+export const resolveUserFromCookie = (cookieHeader?: string | null): User | null => {
+    const token = readCookie(cookieHeader, USER_TOKEN_COOKIE);
+    return token ? verifyUserToken(token) : null;
 };

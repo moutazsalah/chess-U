@@ -1,33 +1,28 @@
 import { createApp } from "@chessu/shared";
-import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
 
 import { resolveUserFromCookie } from "./auth.js";
-import { initGameTables } from "./db.js";
+import { initGameTables, listFinishedGameStates } from "./db.js";
 import { initPublisher } from "./publisher.js";
-import { createGame, getActiveGame, listPublicGames } from "./runtime.js";
+import { createGame, getActiveGame, listPublicGames, recoverActiveGames } from "./runtime.js";
 import { initSocketServer } from "./socket.js";
 
 const app = createApp("game-service");
 const httpServer = createServer(app);
-const io = new Server(httpServer, {
-    cors: {
-        origin: process.env.CORS_ORIGIN || "http://localhost:3000",
-        credentials: true
-    }
-});
+// CORS is handled by the API gateway, browsers never call this service directly
+const io = new Server(httpServer);
 const port = Number(process.env.PORT || 4002);
 
 await initGameTables();
 await initPublisher();
+// games that were in progress when the service stopped get their actors back
+console.log(`recovered ${await recoverActiveGames()} active games`);
 
-app.use(
-    cors({
-        origin: process.env.CORS_ORIGIN || "http://localhost:3000",
-        credentials: true
-    })
-);
+// internal (service-to-service): lets a freshly deployed consumer initialize its game history
+app.get("/v1/internal/games/finished", async (_, res) => {
+    res.status(200).json(await listFinishedGameStates());
+});
 
 app.get("/v1/games", (req, res) => {
     if (req.query.id || req.query.userid) {
@@ -47,14 +42,23 @@ app.get("/v1/games/:code", (req, res) => {
 });
 
 app.post("/v1/games", async (req, res) => {
-    const user = await resolveUserFromCookie(req.headers.cookie);
+    const user = resolveUserFromCookie(req.headers.cookie);
     if (!user?.id) {
         res.status(401).end();
         return;
     }
 
-    const game = await createGame(user, String(req.body.side || "random"), Boolean(req.body.unlisted));
-    res.status(201).json({ code: game.code });
+    try {
+        const game = await createGame(
+            user,
+            String(req.body.side || "random"),
+            Boolean(req.body.unlisted)
+        );
+        res.status(201).json({ code: game.code });
+    } catch (error) {
+        console.error("create game failed", error);
+        res.status(500).json({ message: "Could not create game" });
+    }
 });
 
 initSocketServer(io);

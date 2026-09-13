@@ -1,4 +1,6 @@
+import { signUserToken, USER_TOKEN_COOKIE, USER_TOKEN_MAX_AGE_SECONDS } from "@chessu/shared";
 import type { User } from "@chessu/types";
+import type { Response } from "express";
 import PGSimple from "connect-pg-simple";
 import type { Session } from "express-session";
 import session from "express-session";
@@ -37,3 +39,21 @@ export const sessionMiddleware = session({
     },
     genid: () => nanoid(21)
 });
+
+// signed token that lets other services identify the user without calling identity-service
+export const issueUserToken = (res: Response, user: User) => {
+    res.cookie(
+        USER_TOKEN_COOKIE,
+        signUserToken({ id: user.id as number | string, name: user.name as string }),
+        {
+            httpOnly: true,
+            sameSite: "lax",
+            secure: false,
+            maxAge: USER_TOKEN_MAX_AGE_SECONDS * 1000
+        }
+    );
+};
+
+export const clearUserToken = (res: Response) => {
+    res.clearCookie(USER_TOKEN_COOKIE);
+};

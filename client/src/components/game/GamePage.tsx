@@ -22,14 +22,16 @@ import { Chess } from "chess.js";
 import type { ClearPremoves } from "react-chessboard";
 import { Chessboard } from "react-chessboard";
 
-import { REALTIME_ENABLED, SOCKET_URL } from "@/config";
+import { REALTIME_ENABLED, SOCKET_PATH, SOCKET_URL } from "@/config";
 import { io } from "socket.io-client";
 
 import { lobbyReducer, squareReducer } from "./reducers";
 import { initSocket } from "./socketEvents";
 import { syncPgn, syncSide } from "./utils";
 
-const socket = REALTIME_ENABLED ? io(SOCKET_URL, { withCredentials: true, autoConnect: false }) : null;
+const socket = REALTIME_ENABLED
+    ? io(SOCKET_URL, { path: SOCKET_PATH, withCredentials: true, autoConnect: false })
+    : null;
 
 export default function GamePage({ initialLobby }: { initialLobby: Game }) {
   const session = useContext(SessionContext);

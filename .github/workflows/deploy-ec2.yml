@@ -1,6 +1,6 @@
 name: Deploy EC2 Microservices
 
-# Continuous delivery: after CI passes, build the 3 backend images, push them to GHCR,
+# Continuous delivery: after CI passes, build the 4 backend images, push them to GHCR,
 # then SSH into the EC2 host and restart the stack with Docker Compose.
 on:
   workflow_dispatch:
@@ -35,6 +35,7 @@ jobs:
     strategy:
       matrix:
         service:
+          - api-gateway
           - identity-service
           - game-service
           - stats-history-service
@@ -104,6 +105,8 @@ jobs:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          TOKEN_SECRET: ${{ secrets.TOKEN_SECRET }}
+          CHESSU_GATEWAY_IMAGE: ${{ steps.image.outputs.prefix }}/api-gateway:${{ env.DEPLOY_SHA }}
           CHESSU_IDENTITY_IMAGE: ${{ steps.image.outputs.prefix }}/identity-service:${{ env.DEPLOY_SHA }}
           CHESSU_GAME_IMAGE: ${{ steps.image.outputs.prefix }}/game-service:${{ env.DEPLOY_SHA }}
           CHESSU_STATS_IMAGE: ${{ steps.image.outputs.prefix }}/stats-history-service:${{ env.DEPLOY_SHA }}
@@ -111,7 +114,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: GHCR_USER,GHCR_TOKEN,SESSION_SECRET,CHESSU_IDENTITY_IMAGE,CHESSU_GAME_IMAGE,CHESSU_STATS_IMAGE
+          envs: GHCR_USER,GHCR_TOKEN,SESSION_SECRET,TOKEN_SECRET,CHESSU_GATEWAY_IMAGE,CHESSU_IDENTITY_IMAGE,CHESSU_GAME_IMAGE,CHESSU_STATS_IMAGE
           command_timeout: 15m
           script: |
             set -e
@@ -119,23 +122,26 @@ jobs:
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             # remember the deployed versions so later manual `docker compose` commands use them too
             cat > .env <<EOF
+            GATEWAY_PORT=80
+            CHESSU_GATEWAY_IMAGE=$CHESSU_GATEWAY_IMAGE
             CHESSU_IDENTITY_IMAGE=$CHESSU_IDENTITY_IMAGE
             CHESSU_GAME_IMAGE=$CHESSU_GAME_IMAGE
             CHESSU_STATS_IMAGE=$CHESSU_STATS_IMAGE
             SESSION_SECRET=$SESSION_SECRET
+            TOKEN_SECRET=$TOKEN_SECRET
             EOF
             chmod 600 .env
-            docker compose pull identity-service game-service stats-history-service
-            docker compose up -d --no-build --wait identity-service game-service stats-history-service
+            docker compose pull api-gateway identity-service game-service stats-history-service
+            docker compose up -d --no-build --wait api-gateway identity-service game-service stats-history-service
             docker logout ghcr.io
             docker image prune -f
             docker compose ps
 
-      - name: Smoke check public endpoints
+      - name: Smoke check through the API gateway
         env:
           HOST: ${{ secrets.EC2_HOST }}
         run: |
-          for port in 4001 4002 4003; do
-            curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors "http://$HOST:$port/health"
+          for service in identity game stats; do
+            curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors "http://$HOST/$service/health"
             echo
           done

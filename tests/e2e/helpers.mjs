@@ -1,6 +1,6 @@
-// Shared helpers for the end-to-end tests. They talk to the running Docker Compose stack:
-// the services over HTTP/Socket.IO, and each service's own database directly, so the
-// tests can check what data every microservice actually wrote.
+// Shared helpers for the end-to-end tests. They talk to the running Docker Compose stack like a
+// real client does - only through the API gateway - and read each service's own database
+// directly, so the tests can check what data every microservice actually wrote.
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -9,9 +9,10 @@ import amqplib from "amqplib";
 import pg from "pg";
 import { io } from "socket.io-client";
 
-export const identityUrl = process.env.IDENTITY_URL || "http://127.0.0.1:4001";
-export const gameUrl = process.env.GAME_URL || "http://127.0.0.1:4002";
-export const statsUrl = process.env.STATS_URL || "http://127.0.0.1:4003";
+export const gatewayUrl = process.env.GATEWAY_URL || "http://127.0.0.1:8080";
+export const identityUrl = `${gatewayUrl}/identity`;
+export const gameUrl = `${gatewayUrl}/game`;
+export const statsUrl = `${gatewayUrl}/stats`;
 export const amqpUrl = process.env.AMQP_URL || "amqp://guest:guest@127.0.0.1:5672";
 
 export const STATS_QUEUE = "stats-history-service.events";
@@ -57,6 +58,13 @@ export const waitFor = async (
     }
 };
 
+// waits until a service answers through the gateway again (after docker compose start/restart)
+export const waitForHealthy = (service, timeoutMs = 60000) =>
+    waitFor(async () => (await fetch(`${gatewayUrl}/${service}/health`).catch(() => null))?.ok, {
+        timeoutMs,
+        label: `${service} health`
+    });
+
 export const uniqueName = (prefix) => `${prefix}${randomBytes(4).toString("hex")}`;
 
 const expectOk = async (response, label) => {
@@ -66,7 +74,12 @@ const expectOk = async (response, label) => {
     return response;
 };
 
-const sessionCookie = (response) => response.headers.get("set-cookie").split(";")[0];
+// identity-service sets two cookies: its own session and the signed user token
+const cookieHeader = (response) =>
+    response.headers
+        .getSetCookie()
+        .map((cookie) => cookie.split(";")[0])
+        .join("; ");
 
 export const registerUser = async (name = uniqueName("user")) => {
     const response = await expectOk(
@@ -77,7 +90,7 @@ export const registerUser = async (name = uniqueName("user")) => {
         }),
         `register ${name}`
     );
-    return { cookie: sessionCookie(response), user: await response.json() };
+    return { cookie: cookieHeader(response), user: await response.json() };
 };
 
 export const updateUserName = async (cookie, name) => {
@@ -89,7 +102,7 @@ export const updateUserName = async (cookie, name) => {
         }),
         "update user"
     );
-    return response.json();
+    return { cookie: cookieHeader(response), user: await response.json() };
 };
 
 export const createGame = async (cookie) => {
@@ -104,7 +117,7 @@ export const createGame = async (cookie) => {
     return (await response.json()).code;
 };
 
-const onceEvent = (socket, event, timeoutMs = 10000) =>
+export const onceEvent = (socket, event, timeoutMs = 10000) =>
     new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
             socket.off(event, handler);
@@ -117,45 +130,68 @@ const onceEvent = (socket, event, timeoutMs = 10000) =>
         socket.once(event, handler);
     });
 
-const connectSocket = async (cookie) => {
-    const socket = io(gameUrl, { transports: ["websocket"], extraHeaders: { Cookie: cookie } });
+// Socket.IO also goes through the gateway, which forwards the WebSocket to game-service
+export const connectSocket = async (cookie) => {
+    const socket = io(gatewayUrl, {
+        path: "/game/socket.io",
+        transports: ["websocket"],
+        extraHeaders: { Cookie: cookie }
+    });
     await onceEvent(socket, "connect");
     return socket;
 };
 
-// Plays "fool's mate" over Socket.IO: black checkmates white in 2 moves.
-// Returns the game code and the gameOver payload.
-export const playFoolsMate = async (whitePlayer, blackPlayer) => {
+export const joinLobby = async (socket, code) => {
+    const synced = onceEvent(socket, "receivedLatestGame");
+    socket.emit("joinLobby", code);
+    return synced;
+};
+
+// white creates the game and black joins it as the second player
+export const startTwoPlayerGame = async (whitePlayer, blackPlayer) => {
     const code = await createGame(whitePlayer.cookie);
     const whiteSocket = await connectSocket(whitePlayer.cookie);
     const blackSocket = await connectSocket(blackPlayer.cookie);
 
+    await joinLobby(whiteSocket, code);
+    await joinLobby(blackSocket, code);
+
+    const joined = onceEvent(whiteSocket, "userJoinedAsPlayer");
+    blackSocket.emit("joinAsPlayer");
+    await joined;
+
+    return { code, whiteSocket, blackSocket };
+};
+
+// sends a move and waits until the opponent received it
+export const playMove = async (mover, opponent, move) => {
+    const received = onceEvent(opponent, "receivedMove");
+    mover.emit("sendMove", move);
+    return received;
+};
+
+// "fool's mate": black checkmates white in 2 moves
+export const FOOLS_MATE = {
+    white: [
+        { from: "f2", to: "f3" },
+        { from: "g2", to: "g4" }
+    ],
+    black: [
+        { from: "e7", to: "e5" },
+        { from: "d8", to: "h4" }
+    ]
+};
+
+// Plays fool's mate over Socket.IO. Returns the game code and the gameOver payload.
+export const playFoolsMate = async (whitePlayer, blackPlayer) => {
+    const { code, whiteSocket, blackSocket } = await startTwoPlayerGame(whitePlayer, blackPlayer);
     try {
-        const whiteSynced = onceEvent(whiteSocket, "receivedLatestGame");
-        whiteSocket.emit("joinLobby", code);
-        await whiteSynced;
-
-        const blackSynced = onceEvent(blackSocket, "receivedLatestGame");
-        blackSocket.emit("joinLobby", code);
-        await blackSynced;
-
-        const joined = onceEvent(whiteSocket, "userJoinedAsPlayer");
-        blackSocket.emit("joinAsPlayer");
-        await joined;
-
-        const moves = [
-            [whiteSocket, blackSocket, { from: "f2", to: "f3" }],
-            [blackSocket, whiteSocket, { from: "e7", to: "e5" }],
-            [whiteSocket, blackSocket, { from: "g2", to: "g4" }]
-        ];
-        for (const [mover, opponent, move] of moves) {
-            const received = onceEvent(opponent, "receivedMove");
-            mover.emit("sendMove", move);
-            await received;
-        }
+        await playMove(whiteSocket, blackSocket, FOOLS_MATE.white[0]);
+        await playMove(blackSocket, whiteSocket, FOOLS_MATE.black[0]);
+        await playMove(whiteSocket, blackSocket, FOOLS_MATE.white[1]);
 
         const gameOver = onceEvent(whiteSocket, "gameOver");
-        blackSocket.emit("sendMove", { from: "d8", to: "h4" });
+        blackSocket.emit("sendMove", FOOLS_MATE.black[1]);
         return { code, gameOver: await gameOver };
     } finally {
         whiteSocket.disconnect();
@@ -169,6 +205,9 @@ export const getPlayerStats = async (userId) => {
     ]);
     return result.rows[0];
 };
+
+export const findHistory = async (code) =>
+    (await statsDb.query(`SELECT * FROM "game_history" WHERE game_code = $1`, [code])).rows[0];
 
 export const withRabbitChannel = async (fn) => {
     const connection = await amqplib.connect(amqpUrl);

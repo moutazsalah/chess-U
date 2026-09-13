@@ -6,19 +6,41 @@ services:
     image: ${CHESSU_CLIENT_IMAGE:-chessu-client:latest}
     container_name: chessu_client
     environment:
-      NEXT_PUBLIC_IDENTITY_API_URL: http://localhost:4001
-      NEXT_PUBLIC_GAME_API_URL: http://localhost:4002
-      NEXT_PUBLIC_STATS_API_URL: http://localhost:4003
-      NEXT_PUBLIC_SOCKET_URL: http://localhost:4002
+      # the frontend only knows the API gateway
+      NEXT_PUBLIC_API_URL: http://localhost:8080
     ports:
       - "3000:3000"
     depends_on:
-      identity-db:
-        condition: service_healthy
-      game-db:
-        condition: service_healthy
-      stats-db:
-        condition: service_healthy
+      - api-gateway
+    networks:
+      - chessu_network
+
+  # single public entry point, forwards /identity, /game and /stats to the internal services
+  api-gateway:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    image: ${CHESSU_GATEWAY_IMAGE:-chessu-gateway:latest}
+    container_name: chessu_gateway
+    environment:
+      PORT: 8080
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      IDENTITY_SERVICE_URL: http://identity-service:4001
+      GAME_SERVICE_URL: http://game-service:4002
+      STATS_SERVICE_URL: http://stats-history-service:4003
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    # no health conditions: the gateway runs even when a service is down and answers 503 for it
+    depends_on:
+      - identity-service
+      - game-service
+      - stats-history-service
     networks:
       - chessu_network
 
@@ -31,12 +53,12 @@ services:
     container_name: chessu_identity
     environment:
       PORT: 4001
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
       DATABASE_URL: postgres://user:password@identity-db:5432/chessu_identity
       SESSION_SECRET: ${SESSION_SECRET:-change-me}
+      TOKEN_SECRET: ${TOKEN_SECRET:-dev-token-secret}
       AMQP_URL: amqp://guest:guest@rabbitmq:5672
     ports:
-      - "4001:4001"
+      - "127.0.0.1:4001:4001"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4001/health"]
       interval: 5s
@@ -59,12 +81,12 @@ services:
     container_name: chessu_game
     environment:
       PORT: 4002
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
       DATABASE_URL: postgres://user:password@game-db:5432/chessu_game
       AMQP_URL: amqp://guest:guest@rabbitmq:5672
-      IDENTITY_SERVICE_URL: http://identity-service:4001
+      # verifies the tokens signed by identity-service, no call to identity-service needed
+      TOKEN_SECRET: ${TOKEN_SECRET:-dev-token-secret}
     ports:
-      - "4002:4002"
+      - "127.0.0.1:4002:4002"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4002/health"]
       interval: 5s
@@ -87,11 +109,13 @@ services:
     container_name: chessu_stats
     environment:
       PORT: 4003
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
       DATABASE_URL: postgres://user:password@stats-db:5432/chessu_stats
       AMQP_URL: amqp://guest:guest@rabbitmq:5672
+      # used only once, to initialize empty read models
+      IDENTITY_SERVICE_URL: http://identity-service:4001
+      GAME_SERVICE_URL: http://game-service:4002
     ports:
-      - "4003:4003"
+      - "127.0.0.1:4003:4003"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4003/health"]
       interval: 5s

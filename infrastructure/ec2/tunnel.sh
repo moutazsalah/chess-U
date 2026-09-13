@@ -1,7 +1,7 @@
 #!/bin/bash
 # Opens an SSH tunnel to the EC2 host so the end-to-end tests (and the RabbitMQ UI) can reach
-# the deployed stack exactly like the local one. Databases and RabbitMQ are not public,
-# they only listen on the server's 127.0.0.1.
+# the deployed stack exactly like the local one. Only the API gateway is public (port 80);
+# the services, databases and RabbitMQ only listen on the server's 127.0.0.1.
 #
 # Usage:  infrastructure/ec2/tunnel.sh <ec2-host> [ssh-key]
 # Then, in another terminal (stop the local stack first, the ports are the same):
@@ -12,8 +12,9 @@ set -euo pipefail
 HOST="${1:?usage: tunnel.sh <ec2-host> [ssh-key]}"
 KEY="${2:-$HOME/.ssh/chessu-key.pem}"
 
-forwards=()
-for port in 4001 4002 4003 5433 5434 5435 5672 15672; do
+# local 8080 -> gateway on port 80, the rest 1:1
+forwards=(-L "8080:127.0.0.1:80")
+for port in 5433 5434 5435 5672 15672; do
     forwards+=(-L "${port}:127.0.0.1:${port}")
 done
 

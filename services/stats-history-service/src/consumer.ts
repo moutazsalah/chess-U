@@ -1,7 +1,7 @@
 import type { DbClient, DomainEvent } from "@chessu/shared";
 import { connectRabbitMq, DOMAIN_EVENTS_EXCHANGE } from "@chessu/shared";
 
-import { db } from "./db.js";
+import { withTransaction } from "./db.js";
 
 export const QUEUE = "stats-history-service.events";
 export const DEAD_LETTER_EXCHANGE = "domain-events.dead-letter";
@@ -12,7 +12,7 @@ const SUBSCRIBED_EVENTS = ["UserRegistered", "UserUpdated", "GameFinished"];
 
 type Player = { id?: number | string; name?: string | null };
 
-type GameFinishedPayload = {
+export type GameFinishedPayload = {
     code: string;
     white?: Player;
     black?: Player;
@@ -23,7 +23,7 @@ type GameFinishedPayload = {
     endedAt?: number;
 };
 
-const upsertPlayer = async (client: DbClient, userId: string, displayName: string) => {
+export const upsertPlayer = async (client: DbClient, userId: string, displayName: string) => {
     await client.query(
         `INSERT INTO "player_stats"(user_id, display_name)
          VALUES($1, $2)
@@ -56,13 +56,16 @@ const handleUserEvent = async (client: DbClient, event: DomainEvent<Player>) => 
     }
 };
 
-const handleGameFinished = async (client: DbClient, event: DomainEvent<GameFinishedPayload>) => {
-    const { white, black, winner, endReason, pgn, startedAt, endedAt, code } = event.payload;
+// also used by the initialization, which imports finished games from game-service
+export const applyGameFinished = async (client: DbClient, game: GameFinishedPayload) => {
+    const { white, black, winner, endReason, pgn, startedAt, endedAt, code } = game;
 
-    await client.query(
+    // a game is recorded once, even if it arrives both from the initialization and as an event
+    const inserted = await client.query(
         `INSERT INTO "game_history"(
             game_code, white_id, white_name, black_id, black_name, winner, end_reason, pgn, started_at, ended_at
-         ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+         ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (game_code) DO NOTHING`,
         [
             code,
             white?.id ? String(white.id) : null,
@@ -76,6 +79,9 @@ const handleGameFinished = async (client: DbClient, event: DomainEvent<GameFinis
             endedAt ? new Date(endedAt) : new Date()
         ]
     );
+    if (!inserted.rowCount) {
+        return;
+    }
 
     if (winner === "draw") {
         await incrementResult(client, white, "draws");
@@ -95,10 +101,8 @@ const handleGameFinished = async (client: DbClient, event: DomainEvent<GameFinis
  * The event id is recorded in "processed_events" in the same transaction as the
  * read-model update, so a duplicate is detected and skipped instead of counted twice.
  */
-export const applyEvent = async (event: DomainEvent) => {
-    const client = await db.connect();
-    try {
-        await client.query("BEGIN");
+export const applyEvent = (event: DomainEvent) =>
+    withTransaction(async (client) => {
         const inserted = await client.query(
             `INSERT INTO "processed_events"(event_id, event_type)
              VALUES($1, $2)
@@ -106,7 +110,6 @@ export const applyEvent = async (event: DomainEvent) => {
             [event.id, event.type]
         );
         if (!inserted.rowCount) {
-            await client.query("ROLLBACK");
             console.log(`skipping duplicate event ${event.type} ${event.id}`);
             return false;
         }
@@ -114,18 +117,10 @@ export const applyEvent = async (event: DomainEvent) => {
         if (event.type === "UserRegistered" || event.type === "UserUpdated") {
             await handleUserEvent(client, event as DomainEvent<Player>);
         } else if (event.type === "GameFinished") {
-            await handleGameFinished(client, event as DomainEvent<GameFinishedPayload>);
+            await applyGameFinished(client, (event as DomainEvent<GameFinishedPayload>).payload);
         }
-
-        await client.query("COMMIT");
         return true;
-    } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-    } finally {
-        client.release();
-    }
-};
+    });
 
 export const initConsumer = async () => {
     const { channel } = await connectRabbitMq();

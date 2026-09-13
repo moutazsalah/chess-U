@@ -1,6 +1,21 @@
-import { createDbPool } from "@chessu/shared";
+import { createDbPool, type DbClient } from "@chessu/shared";
 
 export const db = createDbPool();
+
+export const withTransaction = async <T>(work: (client: DbClient) => Promise<T>) => {
+    const client = await db.connect();
+    try {
+        await client.query("BEGIN");
+        const result = await work(client);
+        await client.query("COMMIT");
+        return result;
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
+    }
+};
 
 export const initReadModelTables = async () => {
     await db.query(`
@@ -30,6 +45,10 @@ export const initReadModelTables = async () => {
             ended_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     `);
+
+    await db.query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS "game_history_game_code_key" ON "game_history"(game_code)`
+    );
 
     // inbox of already-applied event ids, used to make the consumer idempotent
     await db.query(`
