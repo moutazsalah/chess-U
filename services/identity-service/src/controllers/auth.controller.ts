@@ -3,16 +3,10 @@ import { hash, verify } from "argon2";
 import type { Request, Response } from "express";
 import xss from "xss";
 
-import { createDomainEvent } from "@chessu/shared";
-import { publishDomainEvent } from "../publisher.js";
+import { publishEvent as emitIdentityEvent } from "../publisher.js";
 import { createUser, findByNameOrEmail, updateUserById } from "../repositories/user.repository.js";
 
 const usernamePattern = /^[A-Za-z0-9]+$/;
-
-const emitIdentityEvent = async (type: string, payload: unknown) => {
-    const event = createDomainEvent("identity-service", type, payload);
-    await publishDomainEvent(event);
-};
 
 export const getCurrentSession = async (req: Request, res: Response) => {
     if (req.session.user) {

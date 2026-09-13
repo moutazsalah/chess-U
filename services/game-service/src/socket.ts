@@ -1,15 +1,9 @@
 import type { User } from "@chessu/types";
 import type { Server, Socket } from "socket.io";
 
+import type { Move } from "./actor.js";
 import { resolveUserFromCookie } from "./auth.js";
-import {
-    claimAbandoned,
-    getActiveGame,
-    joinAsPlayer,
-    markUserJoined,
-    markUserLeft,
-    sendMove
-} from "./runtime.js";
+import { getActiveGame, sendToGame } from "./runtime.js";
 
 type GameSocket = Socket & {
     data: {
@@ -17,7 +11,8 @@ type GameSocket = Socket & {
     };
 };
 
-const findSocketGameCode = (socket: Socket) => Array.from(socket.rooms).find((room) => room !== socket.id);
+const findSocketGameCode = (socket: Socket) =>
+    Array.from(socket.rooms).find((room) => room !== socket.id);
 
 export const initSocketServer = (io: Server) => {
     io.use(async (socket: GameSocket, next) => {
@@ -36,123 +31,101 @@ export const initSocketServer = (io: Server) => {
     });
 
     io.on("connection", (socket: GameSocket) => {
-        socket.on("disconnect", async () => {
+        // Registers a handler for events that target the socket's current game.
+        // A rejected actor message (game finished, not your turn, illegal move...) must not
+        // become an unhandled rejection, which would crash the process; instead the client
+        // is re-synced with the latest state if the game still exists.
+        const onGameEvent = <A extends unknown[]>(
+            event: string,
+            handler: (gameCode: string, user: User, ...args: A) => Promise<void>
+        ) => {
+            socket.on(event, async (...args: A) => {
+                const gameCode = findSocketGameCode(socket);
+                const user = socket.data.user;
+                if (!gameCode || !user) {
+                    return;
+                }
+                try {
+                    await handler(gameCode, user, ...args);
+                } catch {
+                    const game = getActiveGame(gameCode);
+                    if (game && socket.connected) {
+                        socket.emit("receivedLatestGame", game);
+                    }
+                }
+            });
+        };
+
+        socket.on("disconnecting", async () => {
             const gameCode = findSocketGameCode(socket);
-            if (!gameCode || !socket.data.user) {
+            const user = socket.data.user;
+            if (!gameCode || !user) {
                 return;
             }
-            const game = await markUserLeft(gameCode, socket.data.user);
-            socket.to(gameCode).emit("receivedLatestGame", game);
+            try {
+                const game = await sendToGame(gameCode, { type: "UserLeft", user });
+                socket.to(gameCode).emit("receivedLatestGame", game);
+            } catch {
+                // game already finished and its actor stopped
+            }
         });
 
         socket.on("joinLobby", async (gameCode: string) => {
-            if (!socket.data.user) {
+            const user = socket.data.user;
+            if (!user || !getActiveGame(gameCode)) {
                 return;
             }
 
-            const game = getActiveGame(gameCode);
-            if (!game) {
-                return;
-            }
+            try {
+                const existingRoom = findSocketGameCode(socket);
+                if (existingRoom && existingRoom !== gameCode) {
+                    await socket.leave(existingRoom);
+                }
 
-            const existingRoom = findSocketGameCode(socket);
-            if (existingRoom && existingRoom !== gameCode) {
-                await socket.leave(existingRoom);
+                const latestGame = await sendToGame(gameCode, { type: "UserJoined", user });
+                await socket.join(gameCode);
+                io.to(gameCode).emit("receivedLatestGame", latestGame);
+            } catch {
+                // game finished between the lookup and the join
             }
-
-            const latestGame = await markUserJoined(gameCode, socket.data.user);
-            await socket.join(gameCode);
-            io.to(gameCode).emit("receivedLatestGame", latestGame);
         });
 
-        socket.on("leaveLobby", async () => {
-            const gameCode = findSocketGameCode(socket);
-            if (!gameCode || !socket.data.user) {
-                return;
-            }
-
-            const latestGame = await markUserLeft(gameCode, socket.data.user);
+        onGameEvent("leaveLobby", async (gameCode, user) => {
             await socket.leave(gameCode);
+            const latestGame = await sendToGame(gameCode, { type: "UserLeft", user });
             socket.to(gameCode).emit("receivedLatestGame", latestGame);
         });
 
-        socket.on("getLatestGame", () => {
-            const gameCode = findSocketGameCode(socket);
-            if (!gameCode) {
-                return;
-            }
+        onGameEvent("getLatestGame", async (gameCode) => {
             const game = getActiveGame(gameCode);
             if (game) {
                 socket.emit("receivedLatestGame", game);
             }
         });
 
-        socket.on("sendMove", async (move: { from: string; to: string; promotion?: string }) => {
-            const gameCode = findSocketGameCode(socket);
-            if (!gameCode || !socket.data.user) {
-                return;
-            }
-
-            try {
-                const result = await sendMove(gameCode, socket.data.user, move);
-                socket.to(gameCode).emit("receivedMove", move);
-
-                if (result.gameOver) {
-                    io.to(gameCode).emit("gameOver", {
-                        ...result.gameOver
-                    });
-                }
-            } catch (error) {
-                const game = getActiveGame(gameCode);
-                if (game) {
-                    socket.emit("receivedLatestGame", game);
-                }
+        onGameEvent("sendMove", async (gameCode, user, move: Move) => {
+            const result = await sendToGame(gameCode, { type: "SendMove", user, move });
+            socket.to(gameCode).emit("receivedMove", move);
+            if (result.gameOver) {
+                io.to(gameCode).emit("gameOver", result.gameOver);
             }
         });
 
-        socket.on("joinAsPlayer", async () => {
-            const gameCode = findSocketGameCode(socket);
-            if (!gameCode || !socket.data.user) {
-                return;
-            }
-
-            const result = await joinAsPlayer(gameCode, socket.data.user);
+        onGameEvent("joinAsPlayer", async (gameCode, user) => {
+            const result = await sendToGame(gameCode, { type: "JoinAsPlayer", user });
             if (result.side) {
-                io.to(gameCode).emit("userJoinedAsPlayer", {
-                    name: socket.data.user.name,
-                    side: result.side
-                });
+                io.to(gameCode).emit("userJoinedAsPlayer", { name: user.name, side: result.side });
             }
             io.to(gameCode).emit("receivedLatestGame", result.game);
         });
 
-        socket.on("chat", (message: string) => {
-            const gameCode = findSocketGameCode(socket);
-            if (!gameCode || !socket.data.user) {
-                return;
-            }
-
-            socket.to(gameCode).emit("chat", {
-                author: socket.data.user,
-                message
-            });
+        onGameEvent("chat", async (gameCode, user, message: string) => {
+            socket.to(gameCode).emit("chat", { author: user, message });
         });
 
-        socket.on("claimAbandoned", async (type: "win" | "draw") => {
-            const gameCode = findSocketGameCode(socket);
-            if (!gameCode || !socket.data.user) {
-                return;
-            }
-
-            try {
-                const result = await claimAbandoned(gameCode, socket.data.user, type);
-                io.to(gameCode).emit("gameOver", result);
-            } catch (error) {
-                const game = getActiveGame(gameCode);
-                if (game) {
-                    socket.emit("receivedLatestGame", game);
-                }
-            }
+        onGameEvent("claimAbandoned", async (gameCode, user, claim: "win" | "draw") => {
+            const result = await sendToGame(gameCode, { type: "ClaimAbandoned", user, claim });
+            io.to(gameCode).emit("gameOver", result);
         });
     });
 };

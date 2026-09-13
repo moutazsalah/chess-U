@@ -1,10 +1,30 @@
-import type { DomainEvent } from "@chessu/shared";
-import { connectRabbitMq } from "@chessu/shared";
+import type { DbClient, DomainEvent } from "@chessu/shared";
+import { connectRabbitMq, DOMAIN_EVENTS_EXCHANGE } from "@chessu/shared";
 
 import { db } from "./db.js";
 
-const upsertPlayer = async (userId: string, displayName: string) => {
-    await db.query(
+export const QUEUE = "stats-history-service.events";
+export const DEAD_LETTER_EXCHANGE = "domain-events.dead-letter";
+export const DEAD_LETTER_QUEUE = "stats-history-service.dead-letter";
+
+// only the events this read model is built from
+const SUBSCRIBED_EVENTS = ["UserRegistered", "UserUpdated", "GameFinished"];
+
+type Player = { id?: number | string; name?: string | null };
+
+type GameFinishedPayload = {
+    code: string;
+    white?: Player;
+    black?: Player;
+    winner?: "white" | "black" | "draw";
+    endReason?: string;
+    pgn?: string;
+    startedAt?: number;
+    endedAt?: number;
+};
+
+const upsertPlayer = async (client: DbClient, userId: string, displayName: string) => {
+    await client.query(
         `INSERT INTO "player_stats"(user_id, display_name)
          VALUES($1, $2)
          ON CONFLICT (user_id)
@@ -13,42 +33,33 @@ const upsertPlayer = async (userId: string, displayName: string) => {
     );
 };
 
-const incrementResults = async (
-    userId: string,
-    displayName: string,
+const incrementResult = async (
+    client: DbClient,
+    player: Player | undefined,
     outcome: "wins" | "losses" | "draws"
 ) => {
-    await upsertPlayer(userId, displayName);
-    await db.query(
+    if (!player?.id || !player.name) {
+        return;
+    }
+    await upsertPlayer(client, String(player.id), player.name);
+    await client.query(
         `UPDATE "player_stats"
          SET ${outcome} = ${outcome} + 1, updated_at = CURRENT_TIMESTAMP
          WHERE user_id = $1`,
-        [userId]
+        [String(player.id)]
     );
 };
 
-const handleUserEvent = async (event: DomainEvent<{ id?: number; name?: string }>) => {
-    if (!event.payload.id || !event.payload.name) {
-        return;
+const handleUserEvent = async (client: DbClient, event: DomainEvent<Player>) => {
+    if (event.payload.id && event.payload.name) {
+        await upsertPlayer(client, String(event.payload.id), event.payload.name);
     }
-    await upsertPlayer(String(event.payload.id), event.payload.name);
 };
 
-const handleGameFinished = async (
-    event: DomainEvent<{
-        code: string;
-        white?: { id?: number | string; name?: string | null };
-        black?: { id?: number | string; name?: string | null };
-        winner?: "white" | "black" | "draw";
-        endReason?: string;
-        pgn?: string;
-        startedAt?: number;
-        endedAt?: number;
-    }>
-) => {
+const handleGameFinished = async (client: DbClient, event: DomainEvent<GameFinishedPayload>) => {
     const { white, black, winner, endReason, pgn, startedAt, endedAt, code } = event.payload;
 
-    await db.query(
+    await client.query(
         `INSERT INTO "game_history"(
             game_code, white_id, white_name, black_id, black_name, winner, end_reason, pgn, started_at, ended_at
          ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
@@ -66,65 +77,93 @@ const handleGameFinished = async (
         ]
     );
 
-    if (white?.id && white.name) {
-        await upsertPlayer(String(white.id), white.name);
-    }
-    if (black?.id && black.name) {
-        await upsertPlayer(String(black.id), black.name);
-    }
-
     if (winner === "draw") {
-        if (white?.id && white.name) {
-            await incrementResults(String(white.id), white.name, "draws");
-        }
-        if (black?.id && black.name) {
-            await incrementResults(String(black.id), black.name, "draws");
-        }
-        return;
-    }
-
-    if (winner === "white") {
-        if (white?.id && white.name) {
-            await incrementResults(String(white.id), white.name, "wins");
-        }
-        if (black?.id && black.name) {
-            await incrementResults(String(black.id), black.name, "losses");
-        }
+        await incrementResult(client, white, "draws");
+        await incrementResult(client, black, "draws");
+    } else if (winner === "white") {
+        await incrementResult(client, white, "wins");
+        await incrementResult(client, black, "losses");
     } else if (winner === "black") {
-        if (black?.id && black.name) {
-            await incrementResults(String(black.id), black.name, "wins");
+        await incrementResult(client, black, "wins");
+        await incrementResult(client, white, "losses");
+    }
+};
+
+/*
+ * Idempotent consumer: RabbitMQ guarantees at-least-once delivery, so the same event can
+ * arrive twice (e.g. the service crashed after updating the DB but before the ack).
+ * The event id is recorded in "processed_events" in the same transaction as the
+ * read-model update, so a duplicate is detected and skipped instead of counted twice.
+ */
+export const applyEvent = async (event: DomainEvent) => {
+    const client = await db.connect();
+    try {
+        await client.query("BEGIN");
+        const inserted = await client.query(
+            `INSERT INTO "processed_events"(event_id, event_type)
+             VALUES($1, $2)
+             ON CONFLICT (event_id) DO NOTHING`,
+            [event.id, event.type]
+        );
+        if (!inserted.rowCount) {
+            await client.query("ROLLBACK");
+            console.log(`skipping duplicate event ${event.type} ${event.id}`);
+            return false;
         }
-        if (white?.id && white.name) {
-            await incrementResults(String(white.id), white.name, "losses");
+
+        if (event.type === "UserRegistered" || event.type === "UserUpdated") {
+            await handleUserEvent(client, event as DomainEvent<Player>);
+        } else if (event.type === "GameFinished") {
+            await handleGameFinished(client, event as DomainEvent<GameFinishedPayload>);
         }
+
+        await client.query("COMMIT");
+        return true;
+    } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+    } finally {
+        client.release();
     }
 };
 
 export const initConsumer = async () => {
-    try {
-        const { channel } = await connectRabbitMq();
-        const queue = await channel.assertQueue("stats-history-service", { durable: true });
-        await channel.bindQueue(queue.queue, "domain-events", "#");
-        channel.consume(queue.queue, async (message: { content: Buffer } | null) => {
-            if (!message) {
-                return;
-            }
+    const { channel } = await connectRabbitMq();
 
-            try {
-                const event = JSON.parse(message.content.toString()) as DomainEvent;
-                if (event.type === "UserRegistered" || event.type === "UserUpdated") {
-                    await handleUserEvent(event as DomainEvent<{ id?: number; name?: string }>);
-                }
-                if (event.type === "GameFinished") {
-                    await handleGameFinished(event as DomainEvent<any>);
-                }
-                channel.ack(message);
-            } catch (error) {
-                console.error("stats-history consumer error", error);
-                channel.nack(message, false, false);
-            }
-        });
-    } catch (error) {
-        console.warn("stats-history-service consumer unavailable", error);
+    // messages that fail processing are routed here instead of being lost
+    await channel.assertExchange(DEAD_LETTER_EXCHANGE, "fanout", { durable: true });
+    await channel.assertQueue(DEAD_LETTER_QUEUE, { durable: true });
+    await channel.bindQueue(DEAD_LETTER_QUEUE, DEAD_LETTER_EXCHANGE, "");
+
+    // durable queue: events published while this service is down wait here until it is back
+    await channel.assertQueue(QUEUE, {
+        durable: true,
+        arguments: { "x-dead-letter-exchange": DEAD_LETTER_EXCHANGE }
+    });
+    for (const eventType of SUBSCRIBED_EVENTS) {
+        await channel.bindQueue(QUEUE, DOMAIN_EVENTS_EXCHANGE, eventType);
     }
+
+    // one unacknowledged message at a time keeps events in publish order
+    await channel.prefetch(1);
+
+    await channel.consume(QUEUE, async (message: { content: Buffer } | null) => {
+        if (!message) {
+            return;
+        }
+        try {
+            const event = JSON.parse(message.content.toString()) as DomainEvent;
+            if (!event.id) {
+                throw new Error("event without id");
+            }
+            await applyEvent(event);
+            // ack only after the DB transaction committed
+            channel.ack(message);
+        } catch (error) {
+            console.error("stats-history consumer error, dead-lettering message", error);
+            channel.nack(message, false, false);
+        }
+    });
+
+    console.log(`stats-history-service consuming ${SUBSCRIBED_EVENTS.join(", ")} from "${QUEUE}"`);
 };

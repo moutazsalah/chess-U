@@ -4,6 +4,7 @@ packages:
   - "services/*"
   - "packages/*"
   - "types"
+  - "tests/*"
 allowBuilds:
   argon2: false
   bufferutil: false

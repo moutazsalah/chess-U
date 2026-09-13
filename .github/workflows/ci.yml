@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - microsservices
 
 jobs:
   build:
@@ -35,8 +36,47 @@ jobs:
       - name: Build shared package and services
         run: pnpm build:microservices
 
+      - name: Unit tests (game actor)
+        run: pnpm test:unit
+
       - name: Build client
         run: pnpm build:client
+
+  e2e:
+    name: End-to-end tests (Docker Compose stack)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Start microservices, databases and RabbitMQ
+        run: docker compose up -d --build --wait identity-service game-service stats-history-service
+
+      - name: Run end-to-end tests
+        run: pnpm test:e2e
+
+      - name: Service logs
+        if: always()
+        run: docker compose logs identity-service game-service stats-history-service
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
 
   docker:
     name: Validate Docker Setup

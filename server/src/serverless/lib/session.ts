@@ -5,10 +5,10 @@ const cookieName = "chessu";
 const secret = process.env.SESSION_SECRET || "make sure to change this!";
 const maxAge = 30 * 24 * 60 * 60;
 
-export type ServerlessSession = {
+export interface ServerlessSession {
     id: string;
     user?: User;
-};
+}
 
 function sign(payload: string) {
     return createHmac("sha256", secret).update(payload).digest("base64url");

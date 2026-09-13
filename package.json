@@ -15,12 +15,14 @@
         "build:client": "pnpm --filter client build",
         "build:server": "pnpm --filter server build",
         "build:microservices": "pnpm --filter @chessu/shared build && pnpm --filter @chessu/identity-service build && pnpm --filter @chessu/game-service build && pnpm --filter @chessu/stats-history-service build",
+        "test:unit": "pnpm --filter @chessu/shared build && pnpm --filter @chessu/game-service test",
+        "test:e2e": "pnpm --filter @chessu/e2e-tests test",
         "start": "concurrently \"pnpm --filter client start\" \"pnpm --filter server start\"",
         "start:microservices": "concurrently \"pnpm --filter @chessu/identity-service start\" \"pnpm --filter @chessu/game-service start\" \"pnpm --filter @chessu/stats-history-service start\"",
         "start:client": "pnpm --filter client start",
         "start:server": "pnpm --filter server start",
-        "lint": "eslint . --ignore-pattern \"pnpm-lock.yaml\" --ignore-path .gitignore",
-        "lint:fix": "eslint --fix . --ignore-pattern \"pnpm-lock.yaml\" --ignore-path .gitignore",
+        "lint": "eslint . --ignore-pattern \"pnpm-lock.yaml\" --ignore-pattern chessu-load-test.js --ignore-path .gitignore",
+        "lint:fix": "eslint --fix . --ignore-pattern \"pnpm-lock.yaml\" --ignore-pattern chessu-load-test.js --ignore-path .gitignore",
         "format": "prettier --write . \"!pnpm-lock.yaml\" --ignore-path .gitignore"
     },
     "devDependencies": {

@@ -30,4 +30,13 @@ export const initReadModelTables = async () => {
             ended_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     `);
+
+    // inbox of already-applied event ids, used to make the consumer idempotent
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS "processed_events" (
+            event_id UUID PRIMARY KEY,
+            event_type VARCHAR(64) NOT NULL,
+            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
 };

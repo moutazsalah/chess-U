@@ -1,4 +1,4 @@
-export type LambdaEvent = {
+export interface LambdaEvent {
     rawPath?: string;
     path?: string;
     routeKey?: string;
@@ -14,14 +14,14 @@ export type LambdaEvent = {
     cookies?: string[];
     body?: string | null;
     isBase64Encoded?: boolean;
-};
+}
 
-export type LambdaResponse = {
+export interface LambdaResponse {
     statusCode: number;
     headers?: Record<string, string>;
     cookies?: string[];
     body?: string;
-};
+}
 
 const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:3000";
 

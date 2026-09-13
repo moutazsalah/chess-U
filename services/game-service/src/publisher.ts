@@ -1,29 +1,14 @@
-import type { DomainEvent } from "@chessu/shared";
-import { connectRabbitMq } from "@chessu/shared";
+import { createEventPublisher } from "@chessu/shared";
 
-let publishImpl: ((event: DomainEvent) => Promise<void>) | null = null;
+let publish: Awaited<ReturnType<typeof createEventPublisher>> | null = null;
 
 export const initPublisher = async () => {
-    try {
-        const { channel } = await connectRabbitMq();
-        publishImpl = async (event) => {
-            channel.publish(
-                "domain-events",
-                event.type,
-                Buffer.from(JSON.stringify(event)),
-                { persistent: true, contentType: "application/json" }
-            );
-        };
-    } catch (error) {
-        console.warn("game-service publisher unavailable", error);
-        publishImpl = null;
-    }
+    publish = await createEventPublisher("game-service");
 };
 
-export const publishDomainEvent = async (event: DomainEvent) => {
-    if (!publishImpl) {
-        console.log("game-event", JSON.stringify(event));
-        return;
+export const publishEvent = async (type: string, payload: unknown) => {
+    if (!publish) {
+        throw new Error("game-service publisher not initialized");
     }
-    await publishImpl(event);
+    await publish(type, payload);
 };

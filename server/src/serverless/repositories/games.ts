@@ -15,6 +15,8 @@ type StoredGame = Game & {
 const activeGamesIndexKey = "ACTIVE_GAMES";
 
 function publicStoredGame(game: StoredGame): Game {
+    // strip the DynamoDB key attributes, keep only the public game fields
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { pk, sk, entityType, gsi1pk, gsi1sk, ...publicGame } = game;
     return publicGame;
 }

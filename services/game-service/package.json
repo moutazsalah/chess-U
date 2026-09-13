@@ -6,7 +6,8 @@
     "scripts": {
         "build": "tsc",
         "dev": "tsc-watch --noClear --onSuccess \"node dist/server.js\"",
-        "start": "node dist/server.js"
+        "start": "node dist/server.js",
+        "test": "tsc && node --test \"test/*.test.mjs\""
     },
     "dependencies": {
         "@chessu/shared": "workspace:*",
