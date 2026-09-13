@@ -1,0 +1,13 @@
+{
+    "name": "@chessu/e2e-tests",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "test": "node --test --test-concurrency=1 \"*.test.mjs\""
+    },
+    "dependencies": {
+        "amqplib": "^0.10.7",
+        "pg": "^8.12.0",
+        "socket.io-client": "^4.7.5"
+    }
+}
