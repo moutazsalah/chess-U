@@ -1,5 +1,12 @@
 # Chessu serverless backend
 
+Legacy note: this serverless path belongs to the older backend architecture.
+The current primary deployment story for the microservices project is:
+
+- GitHub Actions CI for build and validation
+- GitHub Actions CD for EC2 deployment
+- Dockerized `identity-service`, `game-service`, `stats-history-service`, and `client`
+
 This adds an AWS serverless backend path:
 
 API Gateway HTTP API -> Lambda -> DynamoDB
