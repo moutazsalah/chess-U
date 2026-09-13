@@ -6,8 +6,10 @@ services:
     image: ${CHESSU_CLIENT_IMAGE:-chessu-client:latest}
     container_name: chessu_client
     environment:
-      # the frontend only knows the API gateway
+      # the frontend only knows the API gateway: public URL for the browser,
+      # internal Docker address for pages rendered on the Next.js server
       NEXT_PUBLIC_API_URL: http://localhost:8080
+      API_URL_INTERNAL: http://api-gateway:8080
     ports:
       - "3000:3000"
     depends_on:
